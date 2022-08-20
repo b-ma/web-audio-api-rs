@@ -588,7 +588,8 @@ pub(crate) struct AudioParamProcessor {
     max_value: f32,
     event_timeline: AudioParamEventTimeline,
     last_event: Option<AudioParamEvent>,
-    buffer: Vec<f32>,
+    buffer: [f32; RENDER_QUANTUM_SIZE],
+    buffer_index: usize,
 }
 
 impl AudioProcessor for AudioParamProcessor {
@@ -621,14 +622,21 @@ impl AudioParamProcessor {
 
         self.compute_buffer(block_time, dt, count);
 
-        self.buffer.as_slice()
+        #[cfg(test)]
+        assert!(self.buffer_index == 1 || self.buffer_index == count);
+
+        // return value is only used in test, so we can trick it
+        if cfg!(test) {
+            let max = self.buffer_index.min(count);
+            &self.buffer[0..max]
+        } else {
+            // this is basically not used anywhere
+            self.buffer.as_slice()
+        }
     }
 
     fn mix_to_output(&mut self, input: &AudioRenderQuantum, output: &mut AudioRenderQuantum) {
-        #[cfg(test)]
-        assert!(self.buffer.len() == 1 || self.buffer.len() == RENDER_QUANTUM_SIZE);
-
-        if self.buffer.len() == 1 && input.is_silent() {
+        if self.buffer_index == 1 && input.is_silent() {
             let mut value = self.buffer[0];
 
             if value.is_nan() {
@@ -990,14 +998,15 @@ impl AudioParamProcessor {
         self.current_value.store(clamped);
 
         // clear the buffer for this block
-        self.buffer.clear();
+        self.buffer_index = 0;
 
         let is_a_rate = self.is_a_rate.load(Ordering::SeqCst);
         let is_k_rate = !is_a_rate;
         let is_timeline_empty = self.event_timeline.is_empty();
 
         if is_k_rate || is_timeline_empty {
-            self.buffer.push(self.intrisic_value);
+            self.buffer[self.buffer_index] = self.intrisic_value;
+            self.buffer_index += 1;
 
             // nothing to compute in timeline
             if is_timeline_empty {
@@ -1013,7 +1022,11 @@ impl AudioParamProcessor {
             match some_event {
                 None => {
                     if is_a_rate {
-                        self.buffer.resize(count, self.intrisic_value);
+                        for i in self.buffer_index..count {
+                            self.buffer[i] = self.intrisic_value;
+                        }
+
+                        self.buffer_index = count;
                     }
                     break;
                 }
@@ -1039,8 +1052,9 @@ impl AudioParamProcessor {
                                 let end_index = ((time - block_time).max(0.) / dt) as usize;
                                 let end_index_clipped = end_index.min(count);
 
-                                for _ in self.buffer.len()..end_index_clipped {
-                                    self.buffer.push(self.intrisic_value);
+                                for _ in self.buffer_index..end_index_clipped {
+                                    self.buffer[self.buffer_index] = self.intrisic_value;
+                                    self.buffer_index += 1;
                                 }
                             }
 
@@ -1080,7 +1094,7 @@ impl AudioParamProcessor {
                             let diff = end_value - start_value;
 
                             if is_a_rate {
-                                let start_index = self.buffer.len();
+                                let start_index = self.buffer_index;
                                 // we need to `ceil()` because if `end_time` is between two samples
                                 // we actually want the sample before `end_time` to be computed
                                 let end_index =
@@ -1101,7 +1115,8 @@ impl AudioParamProcessor {
                                             time,
                                         );
 
-                                        self.buffer.push(value);
+                                        self.buffer[self.buffer_index] = value;
+                                        self.buffer_index += 1;
 
                                         time += dt;
                                         self.intrisic_value = value;
@@ -1186,7 +1201,7 @@ impl AudioParamProcessor {
                                 self.event_timeline.replace_peek(event);
                             } else {
                                 if is_a_rate {
-                                    let start_index = self.buffer.len();
+                                    let start_index = self.buffer_index;
                                     // we need to `ceil()` because if `end_time` is between two samples
                                     // we actually want the sample before `end_time` to be computed
                                     // @todo - more tests
@@ -1206,7 +1221,8 @@ impl AudioParamProcessor {
                                                 time,
                                             );
 
-                                            self.buffer.push(value);
+                                            self.buffer[self.buffer_index] = value;
+                                            self.buffer_index += 1;
                                             self.intrisic_value = value;
 
                                             time += dt;
@@ -1316,7 +1332,7 @@ impl AudioParamProcessor {
                             let time_constant = event.time_constant.unwrap();
 
                             if is_a_rate {
-                                let start_index = self.buffer.len();
+                                let start_index = self.buffer_index;
                                 // we need to `ceil()` because if `end_time` is between two samples
                                 // we actually want the sample before `end_time` to be computed
                                 // @todo - more tests
@@ -1341,7 +1357,8 @@ impl AudioParamProcessor {
                                             )
                                         };
 
-                                        self.buffer.push(value);
+                                        self.buffer[self.buffer_index] = value;
+                                        self.buffer_index += 1;
                                         self.intrisic_value = value;
                                         time += dt;
                                     }
@@ -1425,7 +1442,7 @@ impl AudioParamProcessor {
                             }
 
                             if is_a_rate {
-                                let start_index = self.buffer.len();
+                                let start_index = self.buffer_index;
                                 // we need to `ceil()` because if `end_time` is between two samples
                                 // we actually want the sample before `end_time` to be computed
                                 // @todo - more tests
@@ -1446,7 +1463,8 @@ impl AudioParamProcessor {
                                             )
                                         };
 
-                                        self.buffer.push(value);
+                                        self.buffer[self.buffer_index] = value;
+                                        self.buffer_index += 1;
                                         self.intrisic_value = value;
 
                                         time += dt;
@@ -1535,7 +1553,8 @@ pub(crate) fn audio_param_pair(
         max_value: opts.max_value,
         event_timeline: AudioParamEventTimeline::new(),
         last_event: None,
-        buffer: Vec::with_capacity(RENDER_QUANTUM_SIZE),
+        buffer: [0.; RENDER_QUANTUM_SIZE],
+        buffer_index: 0,
     };
 
     (param, render)
