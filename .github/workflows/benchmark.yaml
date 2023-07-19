@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://json.schemastore.org/github-workflow
 
-name: Benchmark
+name: benchmark
 
 # read-only repo token, no access to secrets
 permissions:
@@ -8,7 +8,8 @@ permissions:
 
 # no access to secrets
 on:
-  pull_request:
+  issue_comment:
+    types: [created, edited]
 
 env:
   CARGO_TERM_COLOR: always
@@ -19,11 +20,25 @@ jobs:
     if: ${{ github.event.issue.pull_request }} && contains(github.event.comment.body, '/bench')
 
     steps:
-      # checkout repo, install dependencies
-      - uses: actions/checkout@v3
+      # the workflow is triggered from main branch
+      # cf. https://stackoverflow.com/a/62345139
+      - name: Github API Request
+        id: request
+        uses: octokit/request-action@v2.0.0
         with:
-          fetch-depth: 0
+          route: ${{ github.event.issue.pull_request.url }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # checkout PR branch
+      - name: Checkout PR Branch
+        uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ fromJson(steps.request.outputs.data).head.repo.full_name }}
+          ref: ${{ steps.pr_data.outputs.branch }}
+
+      # install dependencies
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -47,12 +62,16 @@ jobs:
       - name: Run bench against baseline
         run: cargo bench --no-default-features | sed '0,/^test result:/d' | tee bench.txt
 
+      # for testing
+      # - name: create mock results
+      #   run: echo "my bench results" > bench.txt
+
       ## Save results
       ## see https://securitylab.github.com/research/github-actions-preventing-pwn-requests/
       - name: Save PR number and bench results
         run: |
           mkdir -p ./pr
-          echo ${{ github.event.number }} > ./pr/pr_number.txt
+          echo ${{ github.event.issue.number }} > ./pr/pr_number.txt
           mv bench.txt ./pr/bench.txt
       - uses: actions/upload-artifact@v2
         with:
