@@ -17,26 +17,19 @@ env:
 jobs:
   benchmark:
     runs-on: ubuntu-latest
-    if: ${{ github.event.issue.pull_request }} && contains(github.event.comment.body, '/bench')
+    if: contains(github.event.comment.body, '/bench')
 
     steps:
       # the workflow is triggered from main branch
-      # cf. https://stackoverflow.com/a/62345139
-      - name: Github API Request
-        id: request
-        uses: octokit/request-action@v2.0.0
-        with:
-          route: ${{ github.event.issue.pull_request.url }}
+      # cf. https://github.com/actions/checkout/issues/331
+      # need this first step to init the git repo
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Checkout Pull Request
+        run: hub pr checkout ${{ github.event.issue.number }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # checkout PR branch
-      - name: Checkout PR Branch
-        uses: actions/checkout@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          repository: ${{ fromJson(steps.request.outputs.data).head.repo.full_name }}
-          ref: ${{ steps.pr_data.outputs.branch }}
 
       # install dependencies
       - name: Install Rust toolchain
@@ -74,6 +67,3 @@ jobs:
           echo ${{ github.event.issue.number }} > ./pr/pr_number.txt
           mv bench.txt ./pr/bench.txt
       - uses: actions/upload-artifact@v2
-        with:
-          name: pr
-          path: pr/
